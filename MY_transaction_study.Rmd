@@ -1,0 +1,545 @@
+---
+title: "MY_transaction_study"
+output: html_document
+date: "2024-04-15"
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+gc()
+require(dplyr)
+require(tidyverse)
+require(reticulate)
+require(ggplot2)
+```
+
+# Main
+
+```{python}
+import os
+import csv
+import pandas as pd
+import pandas.io.sql as psql
+import datetime as dt
+import numpy as np
+import warnings
+
+import gspread
+import gspread_dataframe as gd
+import psycopg2 as pg
+
+warnings.filterwarnings('ignore')
+
+DbMain = pg.connect(
+     host="HOST",
+     database="DATABASE",
+     user="USER",
+     password="PASSWORD")
+
+DbInternal = pg.connect(
+     host="HOST",
+     database="DATABASE",
+     user="USER",
+     password="PASSWORD")
+
+start_date = dt.date.fromisoformat('2024-01-01')
+start_date = dt.datetime.strftime(start_date, '%Y-%m-%d')
+
+traffic = psql.read_sql('''SELECT * FROM db_gsc_search_data WHERE grass_date >= '%s'
+''' %(start_date), DbInternal)
+
+DbInternal.close()
+
+my_df = psql.read_sql('''
+SELECT to_char(b.created_at + interval '8 hours', 'DD/MM/YYYY') as order_date,
+count(b.id) as transactions, 
+sum(
+        COALESCE(list_price_local/seller_currency_rate,0)
+        + COALESCE(fee_delivery/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_discount/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_insurance/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_instant/buyer_currency_rate,0)
+        + CASE WHEN COALESCE(offer_price_local/buyer_currency_rate,0) > COALESCE(list_price_local/seller_currency_rate,0)
+            THEN COALESCE(offer_price_local/buyer_currency_rate,0) - COALESCE(list_price_local/seller_currency_rate,0)
+            ELSE 0 END
+        + COALESCE(fee_add_on/buyer_currency_rate,0)
+        + COALESCE(fee_processing_buy/buyer_currency_rate,0) 
+        - COALESCE(total_tax_reportable/buyer_currency_rate,0)
+    ) as gmv,
+count(b.promocode_id) as promocode_count,
+sum(b.promocode_value) as promocode_value,
+SUM(COALESCE(b.capture_subsidy, 0)) as buyer_subsidy,
+SUM(COALESCE(s.capture_subsidy, 0)) as seller_subsidy 
+FROM transaction_buyer b 
+LEFT JOIN transaction_seller s
+ON b.transaction_seller_id = s.id
+WHERE date(b.created_at + interval '8 hours') >= date('%s') AND
+b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((b.nature in ('Pre Order')) and
+    procure_status not in ('null','to_procure','bidding','to_complete_buy')
+    or b.nature not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+and b.buyer_currency_id = 3
+group by 1
+order by 1
+''' % (start_date), DbMain)
+
+
+my_df_prod = psql.read_sql('''
+SELECT to_char(b.created_at + interval '8 hours', 'DD/MM/YYYY') as order_date,
+p.name as product_name,
+count(b.id) as transactions, 
+sum(
+        COALESCE(list_price_local/seller_currency_rate,0)
+        + COALESCE(fee_delivery/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_discount/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_insurance/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_instant/buyer_currency_rate,0)
+        + CASE WHEN COALESCE(offer_price_local/buyer_currency_rate,0) > COALESCE(list_price_local/seller_currency_rate,0)
+            THEN COALESCE(offer_price_local/buyer_currency_rate,0) - COALESCE(list_price_local/seller_currency_rate,0)
+            ELSE 0 END
+        + COALESCE(fee_add_on/buyer_currency_rate,0)
+        + COALESCE(fee_processing_buy/buyer_currency_rate,0) 
+        - COALESCE(total_tax_reportable/buyer_currency_rate,0)
+    ) as gmv,
+count(b.promocode_id) as promocode_count,
+sum(b.promocode_value) as promocode_value,
+SUM(COALESCE(b.capture_subsidy, 0)) as buyer_subsidy,
+SUM(COALESCE(s.capture_subsidy, 0)) as seller_subsidy 
+FROM transaction_buyer b 
+LEFT JOIN transaction_seller s
+ON b.transaction_seller_id = s.id
+LEFT JOIN product p 
+ON b.product_id = p.id
+WHERE date(b.created_at + interval '8 hours') >= date('%s') AND
+b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((b.nature in ('Pre Order')) and
+    procure_status not in ('null','to_procure','bidding','to_complete_buy')
+    or b.nature not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+and b.buyer_currency_id = 3
+group by 1,2
+order by 1,2
+''' % (start_date), DbMain)
+
+my_new_buyer = psql.read_sql('''with first_buy as (select
+buyer_id,min(b.created_at + interval '8 hours') as first_order_date,
+min(b.id) as first_order_id
+from transaction_buyer b
+left join transaction_seller s
+on b.transaction_seller_id = s.id
+where
+b."type" = 'transaction' and
+ b.status not in ('buy_failed', 'canceled', 'failed','payment_failed', 'sell_failed')
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+and ((COALESCE(b.nature,'default') in ('Pre Order')) and procure_status not in ('check_procurement_status','null',
+'to_procure','bidding','to_complete_buy', 'contact_platform')
+or COALESCE(b.nature,'default')  not in  ('Pre Order'))
+group by 1
+order by 1)
+
+select to_char(b.created_at + interval '8 hours','DD/MM/YYYY') as order_date,
+p.name as product_name,
+count(distinct f.buyer_id) as new_buyers,
+sum(b.promocode_value/buyer_currency_rate) as new_buyer_promo_value,
+sum(case when b.promocode_value > 0 then COALESCE(list_price_local/seller_currency_rate,0)
++ COALESCE(fee_delivery/buyer_currency_rate,0)
++ COALESCE(fee_delivery_discount/buyer_currency_rate,0)
++ COALESCE(fee_delivery_insurance/buyer_currency_rate,0)
++ COALESCE(fee_delivery_instant/buyer_currency_rate,0)
++ case when COALESCE(offer_price_local/buyer_currency_rate,0) > COALESCE(list_price_local/seller_currency_rate,0)
+	then COALESCE(offer_price_local/buyer_currency_rate,0) - COALESCE(list_price_local/seller_currency_rate,0)
+	else 0 end
++ COALESCE(fee_add_on/buyer_currency_rate,0)
++ COALESCE(fee_processing_buy/buyer_currency_rate,0)
+ - COALESCE(total_tax_reportable/buyer_currency_rate,0) else 0 end) as new_buyer_promo_gmv,
+sum(COALESCE(b.capture_subsidy,0)) as new_buyer_autocaptue,
+sum(COALESCE(s.capture_subsidy,0)) as new_buyer_seller_autocaptue
+from first_buy f
+left join transaction_buyer b
+on b.id = f.first_order_id
+left join transaction_seller s
+on b.transaction_seller_id = s.id
+LEFT JOIN product p
+ON b.product_id = p.id
+where date(first_order_date) >= date('%s')
+and b.buyer_currency_id = 3
+group by 1,2
+order by 1,2 ''' % (start_date), DbMain)
+
+
+offer_txn1 = psql.read_sql('''
+SELECT to_char(b.created_at + interval '8 hours', 'DD/MM/YYYY') as order_date,
+p.name as product_name,
+count(b.id) as transactions
+FROM transaction_buyer b 
+LEFT JOIN transaction_seller s
+ON b.transaction_seller_id = s.id
+LEFT JOIN product p 
+ON b.product_id = p.id
+WHERE date(b.created_at + interval '8 hours') >= date('%s') AND
+b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((b.nature in ('Pre Order')) and
+    procure_status not in ('null','to_procure','bidding','to_complete_buy')
+    or b.nature not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+and b.buyer_currency_id = 3
+and b.operation = 'buy' and b.nature = 'Direct'
+group by 1,2
+order by 1,2
+''' % (start_date), DbMain)
+
+offer_txn2 = psql.read_sql('''
+SELECT to_char(b.created_at + interval '8 hours', 'DD/MM/YYYY') as order_date,
+p.name as product_name,
+count(b.id) as transactions
+FROM transaction_buyer b 
+LEFT JOIN transaction_seller s
+ON b.transaction_seller_id = s.id
+LEFT JOIN product p 
+ON b.product_id = p.id
+WHERE date(b.created_at + interval '8 hours') >= date('%s') AND
+b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((b.nature in ('Pre Order')) and
+    procure_status not in ('null','to_procure','bidding','to_complete_buy')
+    or b.nature not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+and b.buyer_currency_id = 3 and b.nature = 'Pre Order'
+group by 1,2
+order by 1,2
+''' % (start_date), DbMain)
+DbMain.close()
+```
+
+```{r}
+my_df <- py$my_df
+my_traffic <- py$traffic
+offer1 <- py$offer_txn1
+offer2 <- py$offer_txn2
+
+my_df_prod <- py$my_df_prod
+my_new_buyer <- py$my_new_buyer
+```
+
+
+```{r}
+require(lubridate)
+
+my_traffic$Date <- as.Date(my_traffic$Date, format = '%b %d, %Y')
+my_df$order_date <- as.Date(my_df$order_date, format = '%d/%m/%Y')
+
+offer1 <- offer1 %>% mutate(order_date = as.Date(order_date, format = '%d/%m/%Y')) %>% 
+  rename("offer1" = "transactions")
+
+offer2 <- offer2 %>% mutate(order_date = as.Date(order_date, format = '%d/%m/%Y')) %>% 
+  rename("offer2" = "transactions")
+
+my_df <- my_df %>% 
+  left_join(my_traffic, by = c("order_date" = "Date")) %>% 
+  left_join(offer1, by = 'order_date') %>% 
+  left_join(offer2, by = 'order_date')
+
+my_df <- my_df %>% 
+  mutate(offer1 = ifelse(is.na(offer1), 0, offer1),
+         offer2 = ifelse(is.na(offer2), 0, offer2)) %>% 
+  mutate(offer_txn = transactions - offer1 - offer2)
+```
+
+
+```{r}
+my_df <- my_df %>% arrange(order_date)
+
+my_df <- my_df %>% filter(!is.na(Total.users)) %>% 
+  mutate(promocode_value = ifelse(is.na(promocode_value), 0, promocode_value))
+
+sel_dates <- c('2024-03-05', '2024-03-08', '2024-03-10',
+               '2024-03-18', '2024-03-20', '2024-03-25', 
+               '2024-03-28', '2024-03-29')
+my_df <- my_df %>% 
+  mutate(order_date = as.character(order_date)) %>% 
+  mutate(sel_date = ifelse(order_date %in% sel_dates, 'peak', 'non-peak'))
+
+my_df$aov <- my_df$gmv/my_df$transactions
+
+equal_var_t_test_results <- lapply(my_df[, c("transactions", "offer_txn", "Total.users", "New.users", "promocode_count", "promocode_value", "buyer_subsidy", "seller_subsidy", "aov")], function(col) {
+  t_test_result <- t.test(col ~ sel_date, data = my_df)
+  return(t_test_result)
+})
+
+# Welch's t-test
+welch_t_test_results <- lapply(my_df[, c("transactions", "offer_txn", "Total.users",
+                                        "New.users", "promocode_count", "promocode_value", "buyer_subsidy", "seller_subsidy", "aov")], function(col) {
+  welch_t_test_result <- t.test(col ~ sel_date, data = my_df, var.equal = FALSE)
+  return(welch_t_test_result)
+})
+```
+
+```{r}
+data_my <- my_df %>% select(-c(order_date, offer1, offer2)) %>% 
+  pivot_longer(cols = c(transactions:offer_txn, aov), names_to = "var", values_to = "value")
+
+ggplot(data_my, aes(x=var, y = value, fill = sel_date)) + 
+  geom_boxplot() + facet_wrap(~var, scales = "free") + theme_classic()
+```
+
+```{r}
+require(randomForest)
+my_df <- my_df %>% select(-c(offer1, offer2))
+
+nonpeak <- randomForest(transactions ~., data = my_df %>% filter(sel_date == "non-peak"))
+peak <- randomForest(transactions ~., data = my_df %>% filter(sel_date == "peak"))
+
+importance_NP <- importance(nonpeak)
+importance_P <- importance(peak)
+
+varImpPlot(nonpeak)
+varImpPlot(peak)
+
+```
+
+
+```{r}
+post_date <- my_df %>% filter(order_date >= as.Date('2024-03-01', "%Y-%m-%d")) 
+post_equal_var_t_test_results <- lapply(post_date[, c("transactions", "offer_txn", "Total.users", "New.users", "promocode_count", "promocode_value", "buyer_subsidy", "seller_subsidy", "aov")], function(col) {
+  t_test_result <- t.test(col ~ sel_date, data = post_date)
+  return(t_test_result)
+})
+
+# Welch's t-test
+post_welch_t_test_results <- lapply(post_date[, c("transactions", "offer_txn", "Total.users",
+                                        "New.users", "promocode_count", "promocode_value", "buyer_subsidy", "seller_subsidy", "aov")], function(col) {
+  welch_t_test_result <- t.test(col ~ sel_date, data = post_date, var.equal = FALSE)
+  return(welch_t_test_result)
+})
+```
+
+```{r}
+data_my <- post_date %>% select(-c(order_date)) %>% 
+  pivot_longer(cols = c(transactions:offer_txn, aov), names_to = "var", values_to = "value")
+
+ggplot(data_my, aes(x=var, y = value, fill = sel_date)) + 
+  geom_boxplot() + facet_wrap(~var, scales = "free") + theme_classic()
+```
+
+```{r}
+my_prod_offer1 <- py$offer_txn1
+my_prod_offer2 <- py$offer_txn2
+```
+
+```{r}
+my_df_prod <- my_df_prod %>% mutate(
+  order_date = as.Date(order_date, "%d/%m/%Y"))
+my_new_buyer <- my_new_buyer %>% mutate(
+  order_date = as.Date(order_date, "%d/%m/%Y")) 
+my_prod_offer1 <- my_prod_offer1 %>% mutate(
+  order_date = as.Date(order_date, "%d/%m/%Y")) %>% 
+  rename("offer1" = "transactions")
+my_prod_offer2 <- my_prod_offer2 %>% mutate(
+  order_date = as.Date(order_date, "%d/%m/%Y")) %>% 
+  rename("offer2" = "transactions")
+
+my_df_prod <- my_df_prod %>% 
+  left_join(my_new_buyer, by = c("order_date", "product_name")) %>% 
+  left_join(my_prod_offer1, by = c("order_date", "product_name")) %>% 
+  left_join(my_prod_offer2, by = c("order_date", "product_name"))
+
+```
+
+```{r}
+my_df_prod <- my_df_prod %>% mutate_if(is.numeric, ~ifelse(is.na(.), 0,.)) %>%
+  mutate(offer_txn = transactions - offer1 - offer2) %>% select(-c(offer1, offer2))
+```
+
+```{r}
+my_df_prod_post <- my_df_prod %>% 
+  mutate(sel_date = ifelse(order_date %in% sel_dates, "peak", "non-peak")) %>% filter(order_date >= as.Date('2024-03-01', '%Y-%m-%d'))
+
+new_equal_var_t_test_results <- lapply(my_df_prod_post[, c("new_buyers", "new_buyer_promo_value", "new_buyer_promo_gmv", "new_buyer_autocaptue", "new_buyer_seller_autocaptue")], function(col) {
+  t_test_result <- t.test(col ~ sel_date, data = my_df_prod_post)
+  return(t_test_result)
+})
+
+# Welch's t-test
+new_welch_t_test_results <- lapply(my_df_prod_post[, c("new_buyers", "new_buyer_promo_value", "new_buyer_promo_gmv", "new_buyer_autocaptue", "new_buyer_seller_autocaptue")], function(col) {
+  welch_t_test_result <- t.test(col ~ sel_date, data = my_df_prod_post, var.equal = FALSE)
+  return(welch_t_test_result)
+})
+
+my_df_prod_post <- my_df_prod_post %>% select(-c(order_date)) %>% 
+  pivot_longer(cols = c(transactions:offer_txn), names_to = "var", values_to = "value") 
+
+ggplot(my_df_prod_post, aes(x=var, y = value, fill = sel_date)) + 
+  geom_boxplot() + facet_wrap(~var, scales = "free") + theme_classic()
+```
+
+```{r}
+my_df_prod <- my_df_prod %>% mutate(sel_date = ifelse(order_date %in% sel_dates, "peak", "non-peak"))
+
+nonpeak <- my_df_prod %>% filter(sel_date == "non-peak") %>% filter(order_date >= as.Date("2024-03-01", "%Y-%m-%d"))
+peak <- my_df_prod %>% filter(sel_date == "peak")
+
+prod_np <- nonpeak %>% group_by(product_name) %>% 
+  summarise(gmv = sum(gmv, na.rm=T),
+            txn = sum(transactions, na.rm=T),
+            offer_txn = sum(offer_txn, na.rm=T),
+            new_buyers = sum(new_buyers, na.rm=T),
+            promocode_count = sum(promocode_count, na.rm=T),
+            promocode_value = sum(promocode_value, na.rm=T)) %>%
+  arrange(desc(gmv))
+
+prod_p <- peak %>% group_by(product_name) %>% 
+  summarise(gmv = sum(gmv, na.rm=T),
+    txn = sum(transactions, na.rm=T),
+            offer_txn = sum(offer_txn, na.rm=T),
+            new_buyers = sum(new_buyers, na.rm=T),
+            promocode_count = sum(promocode_count, na.rm=T),
+            promocode_value = sum(promocode_value, na.rm=T)) %>%
+  arrange(desc(gmv))
+
+prod_np 
+```
+
+
+```{r}
+p_unique_prod <- length(unique(prod_p$product_name))
+prod_p <- prod_p %>% mutate(cumgmv = cumsum(gmv),
+                  perc_gmv = cumgmv/sum(gmv)*100,
+                  x_seq = seq(1, p_unique_prod),
+                  cat = "peak")
+
+
+np_unique_prod <- length(unique(prod_np$product_name))
+prod_np <- prod_np %>% mutate(cumgmv = cumsum(gmv),
+                  perc_gmv = cumgmv/sum(gmv)*100,
+                  x_seq = seq(1,np_unique_prod),
+                  cat = "nonpeak")
+
+
+prod_pnp <- rbind(prod_p, prod_np)
+
+ggplot(prod_pnp, aes(x=x_seq, y = perc_gmv, fill = cat, col = cat)) + geom_line(aes(group = cat), linewidth = 1)
+```
+# Seller Perspective  
+
+```{python}
+
+import os
+import csv
+import pandas as pd
+import pandas.io.sql as psql
+import datetime as dt
+import numpy as np
+import warnings
+
+import gspread
+import gspread_dataframe as gd
+import psycopg2 as pg
+
+warnings.filterwarnings('ignore')
+
+DbMain = pg.connect(
+     host="HOST",
+     database="DATABASE",
+     user="USER",
+     password="PASSWORD")
+
+
+start_date = dt.date.fromisoformat('2024-01-01')
+start_date = dt.datetime.strftime(start_date, '%Y-%m-%d')
+my_seller_df = psql.read_sql('''
+SELECT to_char(b.created_at + interval '8 hours', 'DD/MM/YYYY') as order_date,
+p.name as product_name,
+c.name,
+count(b.id) as transactions, 
+sum(
+        COALESCE(list_price_local/seller_currency_rate,0)
+        + COALESCE(fee_delivery/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_discount/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_insurance/buyer_currency_rate,0)
+        + COALESCE(fee_delivery_instant/buyer_currency_rate,0)
+        + CASE WHEN COALESCE(offer_price_local/buyer_currency_rate,0) > COALESCE(list_price_local/seller_currency_rate,0)
+            THEN COALESCE(offer_price_local/buyer_currency_rate,0) - COALESCE(list_price_local/seller_currency_rate,0)
+            ELSE 0 END
+        + COALESCE(fee_add_on/buyer_currency_rate,0)
+        + COALESCE(fee_processing_buy/buyer_currency_rate,0) 
+        - COALESCE(total_tax_reportable/buyer_currency_rate,0)
+    ) as gmv,
+count(b.promocode_id) as promocode_count,
+sum(b.promocode_value) as promocode_value,
+SUM(COALESCE(b.capture_subsidy, 0)) as buyer_subsidy,
+SUM(COALESCE(s.capture_subsidy, 0)) as seller_subsidy 
+FROM transaction_buyer b 
+LEFT JOIN transaction_seller s
+ON b.transaction_seller_id = s.id
+LEFT JOIN product p 
+ON b.product_id = p.id
+LEFT JOIN currency c 
+ON s.seller_currency_id = c.id
+WHERE date(b.created_at + interval '8 hours') >= date('%s') AND
+b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((b.nature in ('Pre Order')) and
+    procure_status not in ('null','to_procure','bidding','to_complete_buy')
+    or b.nature not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+and b.buyer_currency_id = 3
+group by 1,2,3
+order by 1,2,3
+''' % (start_date), DbMain)
+```
+
+```{r}
+seller_df <- py$my_seller_df
+sel_dates <- c('2024-03-05', '2024-03-08', '2024-03-10',
+               '2024-03-18', '2024-03-20', '2024-03-25', 
+               '2024-03-28', '2024-03-29')
+seller_df <- seller_df %>% 
+  mutate(order_date = as.Date(order_date, "%d/%m/%Y"),
+         date_cat = ifelse(order_date %in% sel_dates, "peak", "non-peak")) 
+
+seller_df %>% filter(order_date >= as.Date("2024-03-01", "%Y-%m-%d")) %>% group_by(name, date_cat) %>% 
+  summarise(txn = sum(transactions, na.rm=T), 
+            gmv = sum(gmv, na.rm=T)) %>% 
+  ungroup() %>% arrange(desc(txn), date_cat) %>% ungroup() %>%
+  group_by(date_cat) %>%
+  mutate(txn_perc = round(txn/sum(txn)*100,1), gmv_perc = round(gmv/sum(gmv)*100,1)) %>% arrange(date_cat, desc(txn))
+```
