@@ -1,0 +1,277 @@
+---
+title: "Wholesale_MOQ_v3"
+output: html_document
+date: "2023-12-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list=ls())
+require(lubridate)
+require(tidyverse)
+require(googlesheets4)
+require(tidyr)
+require(reticulate)
+```
+
+```{python}
+import pandas.io.sql as psql
+import pandas as pd
+import psycopg2 as pg
+import numpy as np
+from pyairtable import Api
+import warnings
+import datetime as dt
+
+warnings.filterwarnings('ignore')
+
+DbMain = pg.connect(
+     host="HOST",
+     database="DATABASE",
+     user="USER",
+     password="PASSWORD")
+     
+wishlist = psql.read_sql('''
+SELECT CASE WHEN w.updated_at > w.created_at THEN
+to_char(w.updated_at + interval '8 hours', 'MM/YYYY') ELSE to_char(w.created_at + interval '8 hours', 'MM/YYYY') END AS month, p.name as product_name, p.sku as product_sku, 
+COUNT (w.id) as wishlists 
+FROM user_wishlist w
+LEFT JOIN product p 
+ON p.id = w.product_id
+WHERE w.active = 'true'
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3
+''', DbMain)
+
+
+from datetime import date
+str_date = date.fromisoformat('2023-06-01')
+end_date = date.fromisoformat('2023-11-29')
+str_date = dt.datetime.strftime(str_date, '%Y-%m-%d')
+end_date = dt.datetime.strftime(end_date, '%Y-%m-%d')
+
+product_transactions = psql.read_sql('''
+select to_char(b.created_at + interval '8 hours','DD/MM/YYYY') as txn_date,
+b.size, 
+p.sku as product_sku,
+count (b.id) as transactions
+from transaction_buyer b
+LEFT JOIN product p 
+ON p.id = b.product_id
+left join transaction_seller s
+on b.transaction_seller_id = s.id
+where date(b.created_at + interval '8 hours' ) >= date('%s')
+and date(b.created_at + interval '8 hours' ) <= date('%s')
+and b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((COALESCE(b.nature,'default') in ('Pre Order')) and procure_status not in ('check_procurement_status','null',
+'to_procure','bidding','to_complete_buy', 'contact_platform')
+or COALESCE(b.nature,'default') not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7')
+and (seller_id not in (12409, 12698) or seller_id is null)
+group by 1,2,3
+order by 1,2,3
+''' % (str_date, end_date), DbMain)
+
+df_gmv = psql.read_sql('''select to_char(b.created_at + interval '8 hours','DD/MM/YYYY') as date,
+p.name as product_name, 
+p.sku as product_sku,
+b.created_at, b.id,
+buyer_id as buyer,
+buyer_country_id, buyer_currency_id, 
+buyer_courier_costs, 
+b.nature,
+b.fee_add_on, inventory_procure_cost, payout_amount, b.delivery_cost_estimate,
+payment_method, payment_fee_additional, payment_fee, buyer_currency_rate, total_paid_local,
+b.promocode_value, b.capture_subsidy as buyer_capture_subsidy, payout_balance_debit_discount_value,
+
+transaction_seller_id as seller,
+list_price_local, seller_currency_rate, seller_currency_id, processing_country_id,
+fee_delivery,fee_delivery_insurance_payment_fee,
+fee_delivery_discount, fee_delivery_insurance, fee_delivery_instant,
+fee_delivery_payment_fee,
+fee_selling_discount, fee_shipping_discount,
+offer_price_local, 
+fee_processing_buy, total_tax_reportable,
+s.procure_cost, s.procure_cost_currency_rate, s.procure_forwarder_cost, s.shipping_cost_estimate, s.capture_subsidy as seller_capture_subsidy,
+
+buyer_forex_markup, seller_forex_markup,
+b.product_id, b.size,
+ta.cost_estimate as add_on_cost_estimate, ta.cost_estimate_currency_rate as add_on_cost_estimate_currency_rate
+
+from transaction_buyer b
+LEFT JOIN product p 
+ON p.id = b.product_id
+left join transaction_seller s on b.transaction_seller_id = s.id
+
+left join transaction_buyer_add_on ta
+on b.id = ta.transaction_buyer_id
+
+where date(b.created_at + interval '8 hours' ) >= date('%s')
+and date(b.created_at + interval '8 hours' ) <= date('%s')
+and b."type" = 'transaction'
+and b.status not in ('buy_failed', 'canceled','failed','payment_failed', 'sell_failed')
+and ((COALESCE(b.nature,'default') in ('Pre Order')) and procure_status not in ('check_procurement_status','null',
+'to_procure','bidding','to_complete_buy', 'contact_platform')
+or COALESCE(b.nature,'default') not in  ('Pre Order'))
+and b.payment_method!='credit'
+and buyer_id not in (12409, 20095, 1804, 19022, 87853) 
+and b.ref not in ('BW7NDNRPDG','BJ76Z59YY7','BO7L8E06EM','BPGRZ0K2KM',
+'BOM981DD67','BP716QPD5G','BPGRZ06P2M','BOM4VJEO2G','BZGE2NPP6M','BOM981D1X7','BE7DPNYYE7','BE7DPNYN17',
+'BP716QP1ZG','BE7DPNY3E7','BJ76Z5J557','BEM8YOJJDM','BOM9810L27','BJ76Z501D7','BE7DPNE007','BDG36V0NQG',
+'BKGO1NVRPG','BEMV90Y3DG','BQ7KZNV8Z7','BR7YE0YV3M','BEM8YO050M','BN7WP0Y23G','B472EX083M','B6M0W3PJ4M','BKGX8PZXV7', 'BN7WPE13NG', 'BEM8YVR9DM','BQ7QXE8J5M', 'BEGZX6L1P7','B472E3OPVM')
+and (seller_id not in (12409, 12698) or seller_id is null)
+''' % (str_date, end_date), DbMain)
+
+product_info = psql.read_sql('''
+SELECT p.id as product_id, 
+p.sku as product_sku FROM product p''', DbMain)
+
+lists = psql.read_sql('''
+SELECT product_id, size, price, stock_count FROM user_product u WHERE active = 'true' AND u."type" = 'selling'
+''', DbMain)
+offers = psql.read_sql('''
+SELECT product_id, size, price, stock_count FROM user_product u WHERE active = 'true' AND u."type" = 'buying'
+''', DbMain)
+```
+
+```{r}
+ns_prod <- py$product_info
+txn <- py$product_transactions
+wishlist <- py$wishlist
+lists <- py$lists
+offers <- py$offers
+
+sku_list <- c("sku1", "sku2", "sku3")
+
+sel_prod <- ns_prod %>% filter(product_sku %in% sku_list) %>% unique()
+
+id_list <- sel_prod %>% select(product_id) %>% pull()
+
+gsheet <- read_sheet(ss = "https://docs.google.com/spreadsheets/d/16PEdhFqvD2u4XTTWTf2eEAVmJbq6jV_PeYwHxArnUkQ/edit#gid=1167413070", sheet = 2) %>%
+  select(Sku, `Product name`, Size, `Price`) %>% unique()
+
+sel_prod <- sel_prod %>% 
+  left_join(gsheet %>% select(Sku, Size) %>% unique() %>% 
+              rename("product_sku" = "Sku"), by = "product_sku")
+
+final_df <- sel_prod %>% 
+  left_join(lists %>% filter(product_id %in% id_list) %>%
+              group_by(product_id, size) %>% 
+              summarise(lowest_list = min(price, na.rm=T),
+                        num_lists = sum(stock_count, na.rm=T)) %>% 
+              rename("Size" = "size"), by = c("product_id", "Size")) %>% 
+  left_join(offers %>% filter(product_id %in% id_list) %>%
+              group_by(product_id, size) %>% 
+              summarise(highest_offer = max(price, na.rm=T),
+                        num_offers = sum(stock_count, na.rm=T)) %>% 
+              rename("Size" = "size"), by = c("product_id", "Size")) 
+```
+
+```{r}
+gmv <- py$df_gmv
+cogs <- py$df_gmv
+cogs_edit <- cogs %>% group_by(id) %>%
+  # COGS
+  mutate(
+    add_on_cogs = c(
+      coalesce(add_on_cost_estimate/add_on_cost_estimate_currency_rate, 0)
+    ), 
+  # payout_amount is for normal seller
+  # procure_cost is for b.nature == "Pre Order" only
+  total_cogs = ifelse(
+    nature == "Pre Order",
+    #pre_order_cogs =
+    sum(c(
+      coalesce(procure_cost/procure_cost_currency_rate, 0), 
+      coalesce(procure_forwarder_cost, 0),
+      ifelse(
+        coalesce(fee_add_on/buyer_currency_rate) > 0, add_on_cogs, 0)
+      ), na.rm=T),
+    # non_pre_order_cogs = 
+    sum(c(
+      coalesce(inventory_procure_cost,0),
+      coalesce(payout_amount, 0),
+      ifelse(
+        coalesce(fee_add_on/buyer_currency_rate, 0) > 0, add_on_cogs, 0)
+      ), na.rm=T)
+  )
+    # total_cogs = non_pre_order_cogs + pre_order_cogs
+    ) %>% ungroup()
+
+cogs_edit <- cogs_edit %>% mutate(date = as.Date(date, "%d/%m/%Y"))
+cogs_final <- cogs_edit %>% rename("Size" = "size") %>%
+  select(date, product_id, Size, total_cogs) %>% 
+  arrange(product_id, Size, desc(date)) %>%
+  group_by(product_id, Size) %>% slice_head(n=3) %>% 
+  mutate(row_number=row_number()) %>% 
+  pivot_wider(
+    id_cols = c(product_id, Size),
+    names_from = row_number,
+    values_from = c(date, total_cogs),
+    names_sep = "_"
+  )
+
+gmv_edit <- gmv %>% group_by(id) %>%
+  # gmv
+  mutate(gmv = 
+           sum(c(
+               coalesce(list_price_local/seller_currency_rate, 0),
+               coalesce(fee_delivery/buyer_currency_rate,0),
+              coalesce(fee_delivery_discount/buyer_currency_rate,0),
+              coalesce(fee_delivery_insurance/buyer_currency_rate,0),
+              coalesce(fee_delivery_instant/buyer_currency_rate,0), 
+              ifelse(
+                coalesce(offer_price_local/buyer_currency_rate, 0) > 
+                coalesce(list_price_local/seller_currency_rate, 0), 
+                coalesce(offer_price_local/buyer_currency_rate, 0) - coalesce(list_price_local/seller_currency_rate, 0), 
+                0),
+              coalesce(fee_add_on/buyer_currency_rate, 0),
+              coalesce(fee_processing_buy/buyer_currency_rate, 0)
+           ), na.rm=T) - 
+           coalesce(total_tax_reportable/buyer_currency_rate, 0)
+  ) %>% ungroup() %>% rename("Size" = "size")
+
+gmv_edit <- gmv_edit %>% mutate(date = as.Date(date, "%d/%m/%Y"))
+gmv_final <- gmv_edit %>%
+  select(date, product_id, Size, gmv) %>% 
+  arrange(product_id, Size, desc(date)) %>%
+  group_by(product_id, Size) %>% slice_head(n=3) %>% 
+  mutate(row_number=row_number()) %>% 
+  pivot_wider(
+    id_cols = c(product_id, Size),
+    names_from = row_number,
+    values_from = c(date, gmv),
+    names_sep = "_"
+  )
+
+cogs_final <- cogs_final %>% 
+  select(product_id, Size, total_cogs_1,total_cogs_2,total_cogs_3, date_1) %>% 
+  rename("cogslatest_transacted_date" = "date_1")
+
+gmv_final <- gmv_final %>% 
+  select(product_id, Size, gmv_1,gmv_2,gmv_3, date_1) %>% 
+  rename("gmvlatest_transacted_date" = "date_1")
+
+final_df <- final_df %>% left_join(
+  cogs_final, by = c("product_id", "Size")
+) %>% left_join(
+  gmv_final, by = c("product_id", "Size")
+)
+
+final_df <- final_df %>% left_join(
+  txn %>% mutate(txn_date = as.Date(txn_date, "%d/%m/%Y")) %>% 
+    filter(txn_date >= as.Date("2023-11-01", "%Y-%m-%d")) %>% 
+    group_by(product_sku, size) %>% 
+    summarise(txn = sum(transactions, na.rm=T)) %>% 
+    rename("Size" = "size"), by = c("product_sku", "Size"))
+write_sheet(final_df, ss = "https://docs.google.com/spreadsheets/d/16PEdhFqvD2u4XTTWTf2eEAVmJbq6jV_PeYwHxArnUkQ/edit#gid=1087431312", sheet = 3)
+```
