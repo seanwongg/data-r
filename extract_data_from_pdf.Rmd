@@ -1,0 +1,226 @@
+---
+title: "extract_data_from_pdf"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r}
+require(reticulate)
+require(tidyverse)
+require(ggplot2)
+require(dplyr)
+require(readxl)
+```
+
+```{python}
+# import sys
+# !{sys.executable} -m pip install pdfplumber
+import pdfplumber
+import pandas as pd
+pdf_file = "IMAS_Q12024_Performance_RiskMonitoring-report_FINAL-1.pdf"
+
+with pdfplumber.open(pdf_file) as pdf:
+    for i, page in enumerate(pdf.pages):
+        tables = page.extract_tables()
+        for table in tables:
+            # Convert table to DataFrame
+            df = pd.DataFrame(table[1:], columns=table[0])
+            print(f"Table {i+1}:\n{df}\n")
+            
+#table 13 & 14 - average performance 14 : ILP, 13: UT
+# table 16, 18, 19: mornign star ratings list A UT Funds
+# table 21, 22, 23, 24,25: ILP
+# table 26,27,28,29: expense ratio UT
+# table 30,31, 32, 33: expense ratio ILP
+# table 34: expense ratio List b UT funds
+# table 35,36: classifcation table UT
+# table 37, 38, 40: classification table ILP
+tables_to_extract = {13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 40}
+extracted_tables = {}
+with pdfplumber.open(pdf_file) as pdf:
+    for i, page in enumerate(pdf.pages):
+        tables = page.extract_tables()
+        for j, table in enumerate(tables):
+            table_index = i + 1
+            if table_index in tables_to_extract:
+                df = pd.DataFrame(table[1:], columns=table[0])
+                extracted_tables[f"Table_{table_index}"] = df
+                print(f"Table {table_index} extracted and stored as Table_{table_index}")
+
+ut_avg_perf = extracted_tables['Table_13']
+ilp_avg_perf = extracted_tables['Table_14']
+morning_star_list_a_UT_1 = extracted_tables['Table_17']
+morning_star_list_a_UT_2 = extracted_tables['Table_18']
+morning_star_list_a_UT_3 = extracted_tables['Table_19']
+morning_star_ILP_1 = extracted_tables['Table_21']
+morning_star_ILP_2 = extracted_tables['Table_22']
+morning_star_ILP_3 = extracted_tables['Table_23']
+morning_star_ILP_4 = extracted_tables['Table_24']
+morning_star_ILP_5 = extracted_tables['Table_25']
+expense_ratio_UT_1 = extracted_tables['Table_26']
+expense_ratio_UT_2 = extracted_tables['Table_27']
+expense_ratio_UT_3 = extracted_tables['Table_28']
+expense_ratio_ILP_1 = extracted_tables['Table_29']
+expense_ratio_ILP_2 = extracted_tables['Table_30']
+expense_ratio_ILP_3 = extracted_tables['Table_31']
+expense_ratio_ILP_4 = extracted_tables['Table_32']
+expense_ratio_ILP_5 = extracted_tables['Table_33']
+expense_ratio_ILP_6 = extracted_tables['Table_34']
+class_table_UT_1 = extracted_tables['Table_35']
+class_table_UT_2 = extracted_tables['Table_36']
+class_table_ILP_1 = extracted_tables['Table_37']
+class_table_ILP_2 = extracted_tables['Table_38']
+class_table_ILP_3 = extracted_tables['Table_40']
+
+def convert_parentheses_to_negative(value):
+    if isinstance(value, str) and value.startswith('(') and value.endswith(')'):
+        value = '-' + value[1:-1]
+    return value
+
+columns_to_process = ['3 Months', '1 Year','3 Years\n(Cumulative)', '3 Years\n(Annualized)']
+for column in columns_to_process:
+    ut_avg_perf[column] = ut_avg_perf[column].apply(convert_parentheses_to_negative)
+    ut_avg_perf[column] = pd.to_numeric(ut_avg_perf[column])
+    
+for column in columns_to_process:
+    ilp_avg_perf[column] = ilp_avg_perf[column].apply(convert_parentheses_to_negative)
+    ilp_avg_perf[column] = pd.to_numeric(ilp_avg_perf[column])
+    
+morning_star_col_names = morning_star_ILP_1.columns
+exp_ratio_col_names = expense_ratio_UT_1.columns
+exp_ratio_ILP_col_names = expense_ratio_ILP_1.columns
+UT_class_col_names = class_table_UT_1.columns
+ILP_class_col_names = class_table_ILP_1.columns
+
+import numpy as np
+matrix = np.vstack([morning_star_ILP_2.columns, morning_star_ILP_2.to_numpy()])
+morning_star_ILP_2 = pd.DataFrame(columns = morning_star_col_names, data = matrix[:,:])
+matrix = np.vstack([morning_star_ILP_3.columns, morning_star_ILP_3.to_numpy()])
+morning_star_ILP_3 = pd.DataFrame(columns = morning_star_col_names, data = matrix[:,:])
+matrix = np.vstack([morning_star_ILP_4.columns, morning_star_ILP_4.to_numpy()])
+morning_star_ILP_4 = pd.DataFrame(columns = morning_star_col_names, data = matrix[:,:])
+matrix = np.vstack([morning_star_ILP_5.columns, morning_star_ILP_5.to_numpy()])
+morning_star_ILP_5 = pd.DataFrame(columns = morning_star_col_names, data = matrix[:,:])
+
+matrix = np.vstack([expense_ratio_UT_2.columns, expense_ratio_UT_2.to_numpy()])
+expense_ratio_UT_2 = pd.DataFrame(columns = exp_ratio_col_names, data = matrix[:,:])
+matrix = np.vstack([expense_ratio_UT_3.columns, expense_ratio_UT_3.to_numpy()])
+expense_ratio_UT_3 = pd.DataFrame(columns = exp_ratio_col_names, data = matrix[:,:])
+
+matrix = np.vstack([expense_ratio_ILP_2.columns, expense_ratio_ILP_2.to_numpy()])
+expense_ratio_ILP_2 = pd.DataFrame(columns = exp_ratio_ILP_col_names, data = matrix[:,:])
+matrix = np.vstack([expense_ratio_ILP_3.columns, expense_ratio_ILP_3.to_numpy()])
+expense_ratio_ILP_3 = pd.DataFrame(columns = exp_ratio_ILP_col_names, data = matrix[:,:])
+matrix = np.vstack([expense_ratio_ILP_4.columns, expense_ratio_ILP_4.to_numpy()])
+expense_ratio_ILP_4 = pd.DataFrame(columns = exp_ratio_ILP_col_names, data = matrix[:,:])
+matrix = np.vstack([expense_ratio_ILP_6.columns, expense_ratio_ILP_6.to_numpy()])
+expense_ratio_ILP_6 = pd.DataFrame(columns = exp_ratio_ILP_col_names, data = matrix[:,:])
+
+matrix = np.vstack([class_table_UT_2.columns, class_table_UT_2.to_numpy()])
+class_table_UT_2 = pd.DataFrame(columns = UT_class_col_names, data = matrix[:,:])
+
+matrix = np.vstack([class_table_ILP_2.columns, class_table_ILP_2.to_numpy()])
+class_table_ILP_2 = pd.DataFrame(columns = ILP_class_col_names, data = matrix[:,:])
+matrix = np.vstack([class_table_ILP_3.columns, class_table_ILP_3.to_numpy()])
+class_table_ILP_3 = pd.DataFrame(columns = ILP_class_col_names, data = matrix[:,:])
+
+morn_star_ILP = pd.concat([morning_star_ILP_1,morning_star_ILP_2,morning_star_ILP_3,morning_star_ILP_4,morning_star_ILP_5], axis = 0)
+UT_exp_ratio = pd.concat([expense_ratio_UT_1, expense_ratio_UT_2, expense_ratio_UT_3], axis = 0)
+ILP_exp_ratio = pd.concat([expense_ratio_ILP_1, expense_ratio_ILP_2, expense_ratio_ILP_3, expense_ratio_ILP_4, expense_ratio_ILP_6], axis = 0)
+class_table_UT = pd.concat([class_table_UT_1, class_table_UT_2], axis = 0)
+class_table_ILP = pd.concat([class_table_ILP_1, class_table_ILP_2, class_table_ILP_3], axis=0)
+# morn_star_UT = pd.concat([morning_star_list_a_UT_2,morning_star_list_a_UT_3], axis = 0)
+```
+
+```{r}
+ilp_morn_star <- py$morn_star_ILP 
+ilp_exp_ratio <- py$ILP_exp_ratio 
+ut_exp_ratio <- py$UT_exp_ratio 
+class_table <- py$class_table_UT %>% mutate("type" = "UT") %>% 
+  rename("investment" = "List.of.UTs.as.at.31.Mar.2024..List.A...List.B..according.to.Risk.Classification.Table.") %>%
+  rbind(py$class_table_ILP %>% mutate("type" = "ILP") %>%
+          rename("investment" = "List.of.ILPs.as.of.31.Mar.2024..List.A...List.B..according.to.Risk.Classification.Table.")) %>% select(-X)
+ut_morn_star <- py$morn_star_UT 
+ilp_avg_perf <- py$ilp_avg_perf 
+ut_avg_perf <- py$ut_avg_perf 
+
+ilp_exp_ratio <- ilp_exp_ratio %>% filter(X.4 != "")
+ilp_morn_star <- ilp_morn_star %>% fill(Column2, .direction = "up") %>%
+  filter(Morningstar != "") %>% 
+  filter(Morningstar != "Category not eligible—less than 5 distinct portfolios") %>% 
+  filter(Morningstar != "Category not eligible—\"other\" category")
+ut_morn_star <- ut_morn_star %>% filter(Morningstar != "")
+
+ilp_exp_ratio <- ilp_exp_ratio %>% select(
+  X.1, CPF.Classification, X.4, X.8
+) %>% rename("Name" = "X.1", "CPF.Focus" = "X.4", "NER" = "X.8",
+             "Risk.Class" = "CPF.Classification")
+ut_exp_ratio <- ut_exp_ratio %>% 
+  mutate(X.1 = replace(X.1, X.1 == "", NA)) %>%
+  fill(X.1) %>%
+  select(
+  X.1, Group.Investment, CPF.Classification, CPF.Focus, Annual.Report.Net.Expense.Ratio
+) %>% rename("NER" = "Annual.Report.Net.Expense.Ratio")
+ut_exp_ratio <- ut_exp_ratio %>% filter(Group.Investment != "")
+
+ilp_morn_star <- ilp_morn_star %>% select(
+  `Group/Investment`, Column2, Morningstar, Morningstar7, Morningstar10, Morningstar13
+) %>% rename(
+  "Name" = "Column2", "Risk" = "Morningstar7", "Return" = "Morningstar10", "Sustainability" = "Morningstar13"
+)
+ut_morn_star <- ut_morn_star %>% 
+  select(`Group Investment`, Column2, Morningstar, Risk, Return, Sustainability) %>% 
+  rename("Name" = "Column2")
+
+ilp_avg_perf <- ilp_avg_perf %>% rename("Name" = "Morningstar.Category.ILP..Number.of.Funds.",
+                                        "3m_ret" = "X3.Months",
+                                        "1y_ret" = "X1.Year",
+                                        "3y_ret_cum" = "X3.Years..Cumulative.",
+                                        "3y_ret_ann" = "X3.Years..Annualized.")
+ut_avg_perf <- ut_avg_perf %>% rename("Name" = "Morningstar.Category...UT..Number.of.Funds.",
+                                        "3m_ret" = "X3.Months",
+                                        "1y_ret" = "X1.Year",
+                                        "3y_ret_cum" = "X3.Years..Cumulative.",
+                                        "3y_ret_ann" = "X3.Years..Annualized.")
+
+ilp_morn_star <- ilp_morn_star %>% mutate(star_rating = nchar(Morningstar)) %>% 
+  select(-Morningstar)
+ilp_morn_star <- ilp_morn_star %>% mutate(star_rating = star_rating/2) %>% 
+  filter(!is.na(Risk))
+ut_morn_star <- ut_morn_star %>% mutate(star_rating = nchar(Morningstar)) %>% 
+  select(-Morningstar)
+ut_morn_star <- ut_morn_star %>% mutate(star_rating = star_rating/2) %>% 
+  fill(Name, .direction = "up") %>% filter(!is.na(Risk))
+ilp_avg_perf <- ilp_avg_perf %>% 
+  mutate(Name = str_trim(gsub("\\s*\\(\\d+\\)$", "", Name)))
+ut_avg_perf <- ut_avg_perf %>% 
+  mutate(Name = str_trim(gsub("\\s*\\(\\d+\\)$", "", Name)))
+
+
+
+top_ut <- ut_avg_perf %>% filter(`3m_ret` > 0) %>% filter(`1y_ret` > 0) %>% filter(`3y_ret_ann` > 0) %>% 
+  arrange(desc(`3y_ret_cum`))
+
+ut_exp_ratio <- ut_exp_ratio %>% filter(!is.na(NER)) %>% arrange(NER)
+
+top_ilp <- ilp_avg_perf %>% filter(`3m_ret` > 0) %>% filter(`1y_ret` > 0) %>% filter(`3y_ret_ann` > 0) %>% 
+  arrange(desc(`3y_ret_cum`))
+
+ilp_exp_ratio <- ilp_exp_ratio %>% filter(!is.na(NER)) %>% arrange(NER)
+
+risk_appetite <- c("Low", "Below Avg")
+ret_appetite <- c("High", "Above Avg")
+
+top_ut_morn_star <- ut_morn_star %>% filter(
+  star_rating >= 4) %>% filter(Risk %in% risk_appetite) %>% 
+  filter(Return %in% ret_appetite)
+
+top_ilp_morn_star <- ilp_morn_star %>% filter(
+  star_rating >= 4) %>% filter(Risk %in% risk_appetite) %>% 
+  filter(Return %in% ret_appetite)
+```
+
+```{r}
+DT::datatable(top_ut_morn_star, caption = 'Unit Trusts')
+DT::datatable(top_ilp_morn_star, caption = 'ILP')
+```
